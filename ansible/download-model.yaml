@@ -1,0 +1,64 @@
+---
+- name: Download SWE-Llama 7B Model
+  hosts: spark_workers # Target master and workers
+  become: yes
+  vars:
+    model_repo_id: "princeton-nlp/SWE-LLaMA-7B"
+    model_repo_url: "https://huggingface.co/{{ model_repo_id }}"
+    model_install_parent_dir: "/opt/models" # Parent directory for models
+    model_install_dir: "{{ model_install_parent_dir }}/swe-llama-7b" # Full path to this model
+    # Check the model repo for a guaranteed LFS file name; common ones include:
+    # pytorch_model*.bin, model*.safetensors. Adjust if needed.
+    lfs_check_file: "pytorch_model-00001-of-00002.bin" # Example LFS file to check for pull idempotency
+
+  tasks:
+    - name: Ensure git and git-lfs are installed
+      ansible.builtin.dnf: # Or use yum if needed
+        name:
+          - git
+          - git-lfs
+        state: present
+
+    - name: Ensure model parent directory exists
+      ansible.builtin.file:
+        path: "{{ model_install_parent_dir }}"
+        state: directory
+        mode: '0755'
+        owner: root # Or appropriate user/group
+        group: root
+
+    - name: Clone the model repository (without LFS files initially)
+      # Using command/shell for finer control and idempotency check
+      ansible.builtin.shell:
+        cmd: "git clone --filter=blob:none --no-checkout {{ model_repo_url }} {{ model_install_dir }}"
+      args:
+        creates: "{{ model_install_dir }}/.git" # Check if .git dir exists
+
+    - name: Checkout the main branch (or specific commit/tag)
+      ansible.builtin.shell:
+        cmd: "git checkout main" # Or specify a tag/commit hash
+      args:
+        chdir: "{{ model_install_dir }}"
+      when: not ansible_check_mode # Avoid running in check mode if dir doesn't exist yet
+
+    - name: Pull LFS files
+      ansible.builtin.shell:
+        # Install LFS hooks and pull files. Running pull twice ensures it works even if clone was interrupted.
+        cmd: "git lfs install --system --skip-repo && git lfs pull"
+      args:
+        chdir: "{{ model_install_dir }}"
+        # Check for existence of a specific large LFS file to make this somewhat idempotent.
+        # A more robust check might involve checking file sizes or hashes if needed.
+        creates: "{{ model_install_dir }}/{{ lfs_check_file }}"
+      register: lfs_pull_result
+      retries: 2 # Retry LFS pull in case of transient network issues
+      delay: 10
+      until: lfs_pull_result.rc == 0
+
+    - name: Ensure correct ownership of model directory
+      ansible.builtin.file:
+        path: "{{ model_install_dir }}"
+        state: directory
+        owner: spark
+        group: spark
+        recurse: yes

@@ -1,0 +1,179 @@
+---
+- name: Set up MinIO Server
+  hosts: minio_nodes
+  become: true
+  vars:
+    minio_user: minio-user
+    minio_group: minio-user
+    minio_data_dir: "/data/minio"
+    minio_certs_dir: "/home/{{ minio_user }}/.minio/certs"
+    client_user: "{{ ansible_user | default('almalinux') }}"
+    client_user_home: "/home/{{ client_user }}"
+    mc_config_dir: "{{ client_user_home }}/.mc"
+
+  tasks: 
+  - name: Create minio group
+    ansible.builtin.group:
+      name: "{{ minio_group }}"
+      state: present
+      system: yes
+
+  - name: Create minio user
+    ansible.builtin.user:
+      name: "{{ minio_user }}"
+      group: "{{ minio_group }}"
+      home: "/home/{{ minio_user }}"
+      shell: /sbin/nologin
+      system: yes
+      password_lock: yes
+      state: present
+
+  - name: Ensure cert generation script directory exists
+    ansible.builtin.file:
+      path: /root/setup_scripts
+      state: directory
+      mode: '0700'
+
+  - name: Copy TLS generation script
+    ansible.builtin.copy:
+      src: "files/generate_certs.sh"
+      dest: "/root/setup_scripts/generate_certs.sh"
+      mode: "0755"
+
+  - name: Create certificate using inventory hostname
+    ansible.builtin.command:
+      cmd: "bash generate_certs.sh {{ inventory_hostname }}"
+      chdir: /root/setup_scripts/
+    args:
+      creates: /root/setup_scripts/minio.crt
+
+  - name: Create minio config directory
+    ansible.builtin.file:
+      path: "/home/{{ minio_user }}/.minio"
+      state: directory
+      owner: "{{ minio_user }}"
+      group: "{{ minio_group }}"
+      mode: "0700"
+
+  - name: Create minio certs directory
+    ansible.builtin.file:
+      path: "{{ minio_certs_dir }}"
+      state: directory
+      owner: "{{ minio_user }}"
+      group: "{{ minio_group }}"
+      mode: "0700"
+
+  - name: Copy the certificate for MinIO server
+    ansible.builtin.copy:
+      remote_src: yes
+      src: "/root/setup_scripts/minio.crt"
+      dest: "{{ minio_certs_dir }}/public.crt"
+      owner: "{{ minio_user }}"
+      group: "{{ minio_group }}"
+      mode: "0600"
+
+  - name: Copy the key for MinIO server
+    ansible.builtin.copy:
+      remote_src: yes
+      src: "/root/setup_scripts/minio.key"
+      dest: "{{ minio_certs_dir }}/private.key"
+      owner: "{{ minio_user }}"
+      group: "{{ minio_group }}"
+      mode: "0600"
+
+  - name: Create minio client config directory
+    ansible.builtin.file:
+      path: "{{ mc_config_dir }}"
+      state: directory
+      owner: "{{ client_user }}"
+      group: "{{ client_user }}"
+      mode: "0700"
+
+  - name: Create minio client certs directory
+    ansible.builtin.file:
+      path: "{{ mc_config_dir }}/certs"
+      state: directory
+      owner: "{{ client_user }}"
+      group: "{{ client_user }}"
+      mode: "0700"
+
+  - name: Create minio client CA directory
+    ansible.builtin.file:
+      path: "{{ mc_config_dir }}/certs/CAs"
+      state: directory
+      owner: "{{ client_user }}"
+      group: "{{ client_user }}"
+      mode: "0700"
+
+  - name: Copy the certificate for MC client CA
+    ansible.builtin.copy:
+      remote_src: yes
+      src: "/root/setup_scripts/minio.crt"
+      dest: "{{ mc_config_dir }}/certs/CAs/minio.crt"
+      owner: "{{ client_user }}"
+      group: "{{ client_user }}"
+      mode: "0644"
+
+  - name: Create minio data sub-directory
+    ansible.builtin.file:
+      path: "{{ minio_data_dir }}"
+      owner: "{{ minio_user }}"
+      group: "{{ minio_group }}"
+      mode: "0700"
+      state: directory
+
+  - name: Download Minio Server RPM
+    ansible.builtin.get_url:
+      url: "https://dl.min.io/server/minio/release/linux-amd64/minio.rpm"
+      dest: "/tmp/minio.rpm"
+      mode: '0644'
+
+  - name: Install Minio Server RPM
+    ansible.builtin.shell:
+      cmd: yum install -y /tmp/minio.rpm
+    args:
+      creates: /usr/local/bin/minio
+
+  - name: Download Minio Client (mc)
+    ansible.builtin.get_url:
+      url: "https://dl.min.io/client/mc/release/linux-amd64/mc"
+      dest: /usr/local/bin/mc
+      mode: "0755"
+
+  - name: Set up MinIO environment file from template
+    ansible.builtin.template:
+      src: files/minio.j2
+      dest: /etc/default/minio
+      owner: root
+      group: "{{ minio_group }}"
+      mode: "0640"
+    notify: Restart minio service
+
+  - name: Start and enable Minio service
+    ansible.builtin.systemd:
+      name: minio
+      state: started
+      enabled: yes
+
+  - name: Copy minio pass file for client user
+    ansible.builtin.copy:
+      src: ".miniopass"
+      dest: "{{ client_user_home }}/.miniopass"
+      owner: "{{ client_user }}"
+      group: "{{ client_user }}"
+      mode: "0600"
+
+  - name: Setup mc client config for local access
+    ansible.builtin.template:
+      src: files/mc_config.json.j2
+      dest: "{{ mc_config_dir }}/config.json"
+      owner: "{{ client_user }}"
+      group: "{{ client_user }}"
+      mode: "0600"
+
+  handlers:
+    - name: Restart minio service
+      ansible.builtin.systemd:
+        name: minio
+        state: restarted
+      listen: "Restart minio service"

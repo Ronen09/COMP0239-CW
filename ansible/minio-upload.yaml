@@ -1,0 +1,34 @@
+---
+- name: Configure MinIO Bucket and User
+  hosts: minio_nodes
+  become: yes
+  become_user: "{{ client_user | default('almalinux') }}"
+  vars:
+    minio_alias: local
+    target_bucket: analysis-results
+    gui_user: guiuser
+    gui_password: "abcd1234"
+    client_user: "{{ ansible_user | default('almalinux') }}"
+
+  tasks:
+    - name: Ensure MinIO bucket '{{ target_bucket }}' exists
+      ansible.builtin.command:
+        cmd: "mc mb {{ minio_alias }}/{{ target_bucket }}"
+      register: mc_mb_result
+      failed_when: "mc_mb_result.rc != 0 and 'already exists' not in mc_mb_result.stderr"
+      changed_when: "mc_mb_result.rc == 0 and 'successfully created' in mc_mb_result.stdout"
+
+    - name: Create read-only user '{{ gui_user }}'
+      ansible.builtin.command:
+        cmd: "mc admin user add {{ minio_alias }} {{ gui_user }} {{ gui_password }}"
+      register: mc_user_add_result
+      failed_when: "mc_user_add_result.rc != 0 and 'user already exists' not in mc_user_add_result.stderr"
+      changed_when: "mc_user_add_result.rc == 0 and 'successfully' in mc_user_add_result.stdout"
+      no_log: true
+
+    - name: Attach readwrite policy to user '{{ gui_user }}'
+      ansible.builtin.command:
+        cmd: "mc admin policy attach {{ minio_alias }} readwrite --user={{ gui_user }}"
+      register: mc_policy_attach_result
+      failed_when: "mc_policy_attach_result.rc != 0 and 'already has policy' not in mc_policy_attach_result.stderr"
+      changed_when: "mc_policy_attach_result.rc == 0 and ('Policy' in mc_policy_attach_result.stdout or 'successfully' in mc_policy_attach_result.stdout)"

@@ -1,0 +1,82 @@
+---
+- name: Run Spark SWE-Llama Analysis Job
+  hosts: spark_master
+  vars:
+    # --- Script Source and Destination ---
+    analysis_script_src: "run_spark_swe_llama.py" # Assumes script is in same dir as playbook
+    analysis_script_dest_dir: "/opt/scripts"
+    analysis_script_dest_path: "{{ analysis_script_dest_dir }}/run_spark_swe_llama.py"
+
+    # --- Spark Job Parameters ---
+    spark_master_url: "spark://{{ ansible_default_ipv4.address }}:7077" # Dynamically get master IP
+    spark_executor_memory: "4g" # Adjust based on worker RAM and model size
+    spark_executor_cores: "1"  # Recommended for CPU model loading (1 model per executor)
+    spark_driver_memory: "2g"
+
+    # --- Analysis Script Arguments ---
+    dataset_path: "/opt/data/swe-bench-full" # Path on workers where dataset repo was downloaded
+    dataset_split: "test" # Which split to process (e.g., train, dev, test)
+    model_path: "/opt/models/swe-llama-7b" # Path on workers where model was downloaded
+    output_dir: "/tmp/swe-llama-output-{{ dataset_split }}"
+
+    # --- MinIO Connection Details --- 
+    minio_ip: "{{ hostvars[groups['minio_nodes'][0]]['ansible_default_ipv4']['address'] }}" # Get MinIO IP
+    minio_endpoint: "http://{{ minio_ip }}:9000"
+    minio_bucket: "analysis-results" # Make sure this bucket exists!
+    minio_access_key: "guiuser" # Access key from minio-upload.yaml
+    minio_secret_key: "abcd1234" # Secret key (password) from minio-upload.yaml
+
+  tasks:
+    - name: Ensure analysis script destination directory exists
+      ansible.builtin.file:
+        path: "{{ analysis_script_dest_dir }}"
+        state: directory
+        mode: '0755'
+      become: yes # Creating /opt/scripts likely needs root
+
+    - name: Copy analysis script to master node
+      ansible.builtin.copy:
+        src: "{{ analysis_script_src }}"
+        dest: "{{ analysis_script_dest_path }}"
+        mode: '0755'
+      # become: yes # Only if dest dir requires root ownership/perms
+
+    - name: Submit Spark job
+      # Using shell to allow sourcing environment and using variables
+      ansible.builtin.shell:
+        # Source profile to get SPARK_HOME/JAVA_HOME, then run spark-submit
+        # Using login shell (-l) might also help source profiles
+        cmd: |
+          source /etc/profile
+          /opt/spark/current/bin/spark-submit \
+            --master {{ spark_master_url }} \
+            --deploy-mode client \
+            --executor-memory {{ spark_executor_memory }} \
+            --executor-cores {{ spark_executor_cores }} \
+            --driver-memory {{ spark_driver_memory }} \
+            {{ analysis_script_dest_path }} \
+            --dataset_path {{ dataset_path }} \
+            --dataset_split {{ dataset_split }} \
+            --output_dir {{ output_dir }} \
+            --model_path_override {{ model_path }}
+            --minio_endpoint "{{ minio_endpoint }}" \
+            --minio_access_key "{{ minio_access_key }}" \
+            --minio_secret_key "{{ minio_secret_key }}" \
+            --minio_bucket "{{ minio_bucket }}" \
+            --output_path_prefix "{{ output_path_prefix }}"
+      args:
+        chdir: "{{ analysis_script_dest_dir }}" # Run from script directory
+      register: spark_submit_result
+      # Make task potentially long-running and log output
+      async: 7200 # Example: Run async for 2 hours max
+      poll: 30    # Check every 30 seconds
+
+    - name: Display Spark submit command output
+      ansible.builtin.debug:
+        var: spark_submit_result.stdout
+      when: spark_submit_result.stdout is defined
+
+    - name: Display Spark submit command error output (if any)
+      ansible.builtin.debug:
+        var: spark_submit_result.stderr
+      when: spark_submit_result.stderr is defined and spark_submit_result.stderr != ""

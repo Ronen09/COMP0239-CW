@@ -1,0 +1,118 @@
+- name: Set up Prometheus and Grafana
+  hosts: spark_master
+  become: yes  
+  tasks:
+    - name: Install Go language package
+      ansible.builtin.dnf:
+        name: golang
+        state: present
+
+    - name: Install EPEL repository
+      ansible.builtin.dnf:
+        name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+        state: present
+
+    - name: Import EPEL GPG key
+      ansible.builtin.rpm_key:
+        key: /etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9
+        state: present
+
+    - name: Install Prometheus packages without GPG check
+      ansible.builtin.dnf:
+        name:
+          - golang-github-prometheus
+          - golang-github-prometheus-node-exporter
+          - grafana
+        state: present
+        disable_gpg_check: yes
+
+    - name: Ensure prometheus group exists
+      ansible.builtin.group:
+        name: prometheus
+        state: present
+        system: yes
+
+    - name: Ensure prometheus user exists
+      ansible.builtin.user:
+        name: prometheus
+        group: prometheus
+        system: yes
+        shell: /sbin/nologin
+        home: /var/lib/prometheus
+        create_home: no
+        state: present
+
+    - name: Create prometheus config directory
+      ansible.builtin.file:
+        path: /etc/prometheus
+        state: directory
+        owner: prometheus
+        group: prometheus
+        mode: '0755'
+
+    - name: Template the prometheus.yml file
+      template:
+        src: files/prometheus.yml.j2
+        dest: /etc/prometheus/prometheus.yml
+        owner: prometheus
+        group: prometheus
+        mode: '0644'
+      notify: Restart prometheus
+
+    - name: Check if prometheus.service exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/prometheus.service
+      register: prometheus_service
+
+    - name: Create prometheus systemd service file
+      ansible.builtin.template:
+        dest: /etc/systemd/system/prometheus.service
+        content: |
+          [Unit]
+          Description=Prometheus Monitoring System
+          Wants=network-online.target
+          After=network-online.target
+            
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/bin/prometheus \
+            --config.file=/etc/prometheus/prometheus.yml \
+            --storage.tsdb.path=/var/lib/prometheus/ \
+            --web.console.templates=/usr/share/prometheus/consoles \
+            --web.console.libraries=/usr/share/prometheus/console_libraries
+          Restart=always
+          RestartSec=2
+          StartLimitInterval=0
+            
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+      notify: Reload systemd and restart prometheus
+
+    - name: Ensure prometheus service is started and enabled
+      ansible.builtin.systemd:
+        name: prometheus
+        state: started
+        enabled: yes
+
+    - name: Ensure Grafana service is started and enabled
+      ansible.builtin.systemd:
+        name: grafana-server
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: Reload systemd and restart prometheus
+      ansible.builtin.systemd:
+        daemon_reload: yes
+        name: prometheus
+        state: restarted
+      listen: "Reload systemd and restart prometheus"
+
+    - name: Restart prometheus
+      ansible.builtin.systemd:
+        name: prometheus
+        state: restarted
+      listen: "Restart prometheus"

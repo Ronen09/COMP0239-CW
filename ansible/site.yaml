@@ -1,0 +1,29 @@
+# Core Setup
+- import_playbook: common-keys.yaml  # Keep if still needed for key management beyond cloud-init
+- import_playbook: conda-env.yaml    # Installs Anaconda/wget on master & workers
+
+# Monitoring Setup
+- import_playbook: nodeexporter-setup.yaml # Sets up node_exporter for host metrics
+- import_playbook: prometheus-setup.yaml   # Sets up Prometheus/Grafana (likely on master)
+
+# Core Setup
+- import_playbook: common-keys.yaml
+- import_playbook: conda-env.yaml
+
+# Prerequisite Downloads
+- import_playbook: download-model.yaml
+- import_playbook: download-dataset.yaml
+
+# Spark Installation
+- import_playbook: spark-distribution-setup.yaml # Renamed: Distributes Spark to all nodes
+- import_playbook: spark-master-setup.yaml   # New: Configures/starts master service only
+- import_playbook: spark-worker-setup.yaml     # Configures/starts worker services
+
+# MinIO Setup
+- import_playbook: minio-disk.yaml   # Prepare disk on minio node
+- import_playbook: minio-setup.yaml  # Install and configure MinIO server
+- import_playbook: minio-upload.yaml # Create bucket and user
+
+# Monitoring Setup
+- import_playbook: nodeexporter-setup.yaml
+- import_playbook: prometheus-setup.yaml

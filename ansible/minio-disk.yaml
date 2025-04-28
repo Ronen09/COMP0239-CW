@@ -1,0 +1,52 @@
+---
+- name: Set up MinIO data disk
+  hosts: minio_nodes
+  become: true
+  vars:
+    data_disk_device: /dev/vdb
+    mount_point: /data
+
+  tasks:
+    - name: Install xfsprogs (needed for mkfs.xfs)
+      ansible.builtin.dnf:
+        name: xfsprogs
+        state: present
+
+    - name: Check for existing filesystem on "{{ data_disk_device }}"
+      ansible.builtin.command:
+        cmd: lsblk -f -o FSTYPE {{ data_disk_device }}
+      register: lsblk_check
+      changed_when: false
+      failed_when: false
+
+    - name: Partition the entire data disk "{{ data_disk_device }}"
+      community.general.parted:
+        device: "{{ data_disk_device }}"
+        number: 1
+        state: present
+        fs_type: xfs
+        label: gpt
+        part_end: 100%
+      when: "'xfs' not in lsblk_check.stdout"
+
+    - name: Format the partition {{ data_disk_device }}1 as XFS
+      community.general.filesystem:
+        dev: "{{ data_disk_device }}1"
+        fstype: xfs
+        force: no
+      when: "'xfs' not in lsblk_check.stdout"
+
+    - name: Create mount point {{ mount_point }}
+      ansible.builtin.file:
+        path: "{{ mount_point }}"
+        state: directory
+        mode: '0755'
+
+    - name: Mount the XFS partition at {{ mount_point }}
+      ansible.posix.mount:
+        path: "{{ mount_point }}"
+        src: "{{ data_disk_device }}1"
+        fstype: xfs
+        opts: defaults
+        state: mounted
+        boot: yes

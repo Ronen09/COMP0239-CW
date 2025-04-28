@@ -1,0 +1,4 @@
+{% for node in groups["workers"] %}
+/nfs {{node}}(rw,sync,no_all_squash,no_root_squash)
+{% endfor %}
+/nfs {{groups['headnode'][0]}}(rw,sync,no_all_squash,no_root_squash)

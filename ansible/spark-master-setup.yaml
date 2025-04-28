@@ -1,0 +1,70 @@
+---
+- name: Configure and Start Spark Master Service
+  hosts: spark_master
+  become: yes
+  vars:
+    spark_home: "/opt/spark/current"
+
+  tasks:
+    # Task to set SPARK_HOME and PATH specifically for master
+    - name: Set SPARK_HOME and PATH in system-wide profile on Master
+      ansible.builtin.lineinfile:
+        path: /etc/profile.d/spark.sh # Shared profile file is fine
+        line: "{{ item }}"
+        create: yes
+        mode: '0755'
+      loop:
+        - 'export SPARK_HOME={{ spark_home }}'
+        - 'export PATH=$SPARK_HOME/bin:$SPARK_HOME/sbin:$PATH'
+
+    # Handler for JAVA_HOME is still relevant for the master
+    - name: Install Java (OpenJDK 11) on Master if not already done
+      ansible.builtin.yum:
+        name: java-11-openjdk-devel
+        state: present
+      notify: Update JAVA_HOME_Master # Specific handler name
+
+    - name: Create Spark Master systemd service file
+      ansible.builtin.template:
+        dest: /etc/systemd/system/spark-master.service
+        content: |
+          [Unit]
+          Description=Apache Spark Master
+          After=network.target
+
+          [Service]
+          Type=forking
+          User=root # Or a dedicated spark user
+          Group=root # Or a dedicated spark group
+          Environment="SPARK_HOME={{ spark_home }}"
+          ExecStart={{ spark_home }}/sbin/start-master.sh
+          ExecStop={{ spark_home }}/sbin/stop-master.sh
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+      notify: Reload systemd and restart spark-master # New handler
+
+    - name: Ensure Spark Master service is started and enabled
+      ansible.builtin.systemd:
+        name: spark-master
+        state: started
+        enabled: yes
+        daemon_reload: yes # Ensure reload happens
+
+  handlers:
+    - name: Update JAVA_HOME_Master
+      ansible.builtin.lineinfile:
+        path: /etc/profile.d/java.sh # Use a separate file for Java
+        line: "export JAVA_HOME=$(readlink -f /usr/bin/java | sed 's:/bin/java::')" # Dynamically find JAVA_HOME
+        create: yes
+        mode: '0755'
+      listen: "Update JAVA_HOME_Master"
+
+    - name: Reload systemd and restart spark-master
+      ansible.builtin.systemd:
+        daemon_reload: yes
+        name: spark-master
+        state: restarted
+      listen: "Reload systemd and restart spark-master" # Listen for notification

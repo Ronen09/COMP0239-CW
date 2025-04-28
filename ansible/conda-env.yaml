@@ -1,0 +1,36 @@
+---
+- name: Install System Packages and Python Libraries via Pip
+  hosts: spark_master, spark_workers
+  become: yes # Needed for yum/dnf and system pip install
+  tasks:
+    - name: Ensure system packages are up to date
+      ansible.builtin.yum: # Changed back to yum
+        name: "*"
+        state: latest
+
+    - name: Install required system packages
+      ansible.builtin.yum: # Changed back to yum
+        name: 
+          - python3-pip # Installs /usr/bin/pip3
+          - git
+          - wget
+        state: present
+
+    - name: Install required Python libraries using system pip3
+      # Installs packages globally for the system Python 3 interpreter
+      # WARNING: This can lead to conflicts and pollutes the system environment.
+      ansible.builtin.pip:
+        name:
+          - torch>=2.0.0
+          - transformers>=4.30.0
+          - accelerate>=0.20.0
+          - pandas
+          - pyarrow
+          - huggingface_hub
+        executable: /usr/bin/pip3 # Explicitly use system pip3
+        state: present
+        extra_args: --no-cache-dir # Optional: save some disk space
+      register: pip_install_result
+      # Check output for idempotency (pip module handles this better than shell)
+      changed_when: "'Successfully installed' in pip_install_result.stdout"
+

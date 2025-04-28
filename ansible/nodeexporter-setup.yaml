@@ -1,0 +1,48 @@
+- name: Node exporter installation
+  hosts: all
+  become: true
+  become_user: root
+  tasks:
+  - name: accept repo GPG key
+    ansible.builtin.shell:
+      cmd: rpm --import https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-9
+
+  - name: Install EPEL
+    ansible.builtin.dnf:
+      name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+      state: present
+
+  - name: install node-exporter
+    ansible.builtin.dnf:
+      name: golang-github-prometheus-node-exporter
+      state: latest
+
+  - name: move service file
+    ansible.builtin.copy:
+      src: files/node_exporter.service
+      dest: /etc/systemd/system/node_exporter.service
+      owner: root
+      group: root
+
+  - name: Create custom textfile directory
+    ansible.builtin.file:
+      path: /var/lib/node_exporter/textfile_collector
+      state: directory
+      mode: '0755'
+  
+  - name: Add textfile collector flag to node_exporter service
+    ansible.builtin.lineinfile:
+      path: /etc/systemd/system/node_exporter.service
+      regexp: '^ExecStart=/usr/bin/node_exporter'
+      line: 'ExecStart=/usr/bin/node_exporter --collector.textfile.directory=/var/lib/node_exporter/textfile_collector'
+
+  - name: start node-exporter
+    ansible.builtin.service:
+      name: node_exporter
+      state: started
+      daemon_reload: true
+
+  - name: Enable node-exporter service to start at boot
+    ansible.builtin.systemd:
+      name: node_exporter.service
+      enabled: yes

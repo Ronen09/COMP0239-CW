@@ -1,0 +1,55 @@
+---
+- name: Setup Spark Master and Worker Nodes (Spark Distribution)
+  hosts: spark_master, spark_workers
+  become: yes
+  vars:
+    spark_version: "3.4.3"
+    hadoop_version: "3"
+    spark_download_url: "https://archive.apache.org/dist/spark/spark-{{ spark_version }}/spark-{{ spark_version }}-bin-hadoop{{ hadoop_version }}.tgz"
+    spark_install_dir: "/opt/spark"
+    spark_user: "spark"
+    spark_group: "spark"
+
+  tasks:
+    - name: Check if Spark is already installed
+      ansible.builtin.stat:
+        path: "{{ spark_install_dir }}/spark-{{ spark_version }}-bin-hadoop{{ hadoop_version }}/"
+      register: spark_dir_stat
+
+    - name: Download and Unpack Spark Binaries
+      when: not spark_dir_stat.stat.exists
+      block:
+        - name: Ensure target directory exists
+          ansible.builtin.file:
+            path: "{{ spark_install_dir }}"
+            state: directory
+            mode: '0755'
+
+        - name: Download Spark
+          ansible.builtin.get_url:
+            url: "{{ spark_download_url }}"
+            dest: "/tmp/spark-{{ spark_version }}-bin-hadoop{{ hadoop_version }}.tgz"
+            mode: '0644'
+
+        - name: Unarchive Spark
+          ansible.builtin.unarchive:
+            src: "/tmp/spark-{{ spark_version }}-bin-hadoop{{ hadoop_version }}.tgz"
+            dest: "{{ spark_install_dir }}"
+            remote_src: yes
+            creates: "{{ spark_install_dir }}/spark-{{ spark_version }}-bin-hadoop{{ hadoop_version }}/"
+
+        - name: Remove Spark archive
+          ansible.builtin.file:
+            path: "/tmp/spark-{{ spark_version }}-bin-hadoop{{ hadoop_version }}.tgz"
+            state: absent
+
+    - name: Create Spark symlink for easier upgrades
+      ansible.builtin.file:
+        src: "{{ spark_install_dir }}/spark-{{ spark_version }}-bin-hadoop{{ hadoop_version }}"
+        dest: "{{ spark_install_dir }}/current"
+        state: link
+        force: yes
+
+  handlers:
+    # Java handler is handled in master/worker specific playbooks
+    # Removed handler block from here 

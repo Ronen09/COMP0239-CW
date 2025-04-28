@@ -1,0 +1,67 @@
+---
+- name: Setup Spark Worker Nodes
+  hosts: spark_workers
+  become: yes
+  vars:
+    # Assuming spark_master group is defined in inventory and has one host
+    # This dynamically gets the IP of the first (and only) master node
+    spark_master_ip: "{{ hostvars[groups['spark_master'][0]]['ansible_default_ipv4']['address'] }}"
+    spark_home: "/opt/spark/current"
+    # Optional: Specify resources for workers explicitly (defaults are usually all cores/memory-1g)
+    # spark_worker_cores: "4"
+    # spark_worker_memory: "30g"
+
+  tasks:
+    - name: Install Java (OpenJDK 11)
+      ansible.builtin.yum:
+        name: java-11-openjdk-devel
+        state: present
+      notify: Update JAVA_HOME_Worker
+
+    - name: Create Spark Worker systemd service file
+      ansible.builtin.template:
+        dest: /etc/systemd/system/spark-worker.service
+        content: |
+          [Unit]
+          Description=Apache Spark Worker
+          After=network.target
+
+          [Service]
+          Type=forking
+          User=root # Or a dedicated spark user if you created one
+          Group=root # Or a dedicated spark group
+          Environment="SPARK_HOME={{ spark_home }}"
+          # Optional: Specify cores/memory for worker
+          # Environment="SPARK_WORKER_CORES={{ spark_worker_cores }}"
+          # Environment="SPARK_WORKER_MEMORY={{ spark_worker_memory }}"
+          ExecStart={{ spark_home }}/sbin/start-worker.sh spark://{{ spark_master_ip }}:7077
+          ExecStop={{ spark_home }}/sbin/stop-worker.sh
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+      notify: Reload systemd and restart spark-worker
+
+    - name: Ensure Spark Worker service is started and enabled
+      ansible.builtin.systemd:
+        name: spark-worker
+        state: started
+        enabled: yes
+        daemon_reload: yes # Reload here too just in case
+
+  handlers:
+    - name: Update JAVA_HOME_Worker
+      ansible.builtin.lineinfile:
+        path: /etc/profile.d/java.sh # Can use the same file as master
+        line: "export JAVA_HOME=$(readlink -f /usr/bin/java | sed 's:/bin/java::')" # Same logic to find JAVA_HOME
+        create: yes
+        mode: '0755'
+      listen: "Update JAVA_HOME_Worker"
+
+    - name: Reload systemd and restart spark-worker
+      ansible.builtin.systemd:
+        daemon_reload: yes
+        name: spark-worker
+        state: restarted
+      listen: "Reload systemd and restart spark-worker" 

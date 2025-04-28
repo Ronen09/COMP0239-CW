@@ -1,0 +1,44 @@
+---
+- name: Download Full SWE-Bench Dataset Repository
+  hosts: spark_workers # Only workers need the dataset for local read by executors
+  become: yes
+  vars:
+    dataset_repo_id: "princeton-nlp/SWE-bench"
+    dataset_install_parent_dir: "/opt/data"
+    dataset_install_path: "{{ dataset_install_parent_dir }}/swe-bench-full"
+    idempotency_check_file: "{{ dataset_install_path }}/README.md" # Or adjust to a more specific data file
+
+  tasks:
+    - name: Ensure python3-pip is installed
+      ansible.builtin.dnf: # Or yum
+        name: python3-pip
+        state: present
+
+    - name: Ensure dataset parent directory exists
+      ansible.builtin.file:
+        path: "{{ dataset_install_parent_dir }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Install huggingface_hub library
+      ansible.builtin.pip:
+        name: huggingface_hub
+        state: present
+
+    - name: Download SWE-Bench dataset files using huggingface-cli
+      ansible.builtin.command:
+        cmd: >
+          huggingface-cli download {{ dataset_repo_id }}
+          --repo-type dataset
+          --local-dir {{ dataset_install_path }}
+          --local-dir-use-symlinks False # Avoid symlinks, copy directly
+      args:
+        creates: "{{ idempotency_check_file }}" # Skip if the check file exists
+      register: download_result
+      # Retry might be less effective here as download can be stateful; rely on idempotency check
+      # until: download_result.rc == 0 # Check return code
+      # retries: 2
+      # delay: 10
+      changed_when: download_result.rc == 0 and download_result.stdout != "" # Consider changed only on success with output
